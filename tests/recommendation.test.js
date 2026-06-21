@@ -9,6 +9,28 @@ import {
   getWeightedRandomRecommendation,
   toggleArrayValue,
 } from "../src/recommendation.js";
+import { restaurants } from "../src/restaurants.js";
+
+test("default filters show the complete restaurant list", () => {
+  assert.deepEqual(DEFAULT_FILTERS.routeIntents, []);
+  assert.deepEqual(DEFAULT_FILTERS.cuisines, []);
+  assert.deepEqual(DEFAULT_FILTERS.mealScales, []);
+  assert.deepEqual(DEFAULT_FILTERS.spiceLevels, []);
+  assert.deepEqual(DEFAULT_FILTERS.travelModes, []);
+
+  const recommendations = buildRecommendations(DEFAULT_FILTERS);
+  const restaurantIds = new Set(restaurants.map((restaurant) => restaurant.id));
+
+  assert.equal(recommendations.length, restaurants.length);
+  assert.ok(recommendations.every((card) => restaurantIds.has(card.restaurantId)));
+  assert.deepEqual(describeFilters(DEFAULT_FILTERS), [
+    "路线都可以",
+    "菜系都可以",
+    "饭局规模都可以",
+    "辣度都可以",
+    "路线两者都看",
+  ]);
+});
 
 test("selected cuisines keep recommendations in that cuisine set", () => {
   const recommendations = buildRecommendations({

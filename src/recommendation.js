@@ -1,11 +1,11 @@
 import { CUISINE_LABELS, ROUTE_INTENT_LABELS, restaurants } from "./restaurants.js";
 
 export const DEFAULT_FILTERS = Object.freeze({
-  routeIntents: ["worth_trip"],
-  cuisines: ["yunnan", "hunan"],
-  mealScales: ["大吃一顿"],
-  spiceLevels: ["很辣", "云南辣", "中辣"],
-  travelModes: ["开车", "地铁"],
+  routeIntents: [],
+  cuisines: [],
+  mealScales: [],
+  spiceLevels: [],
+  travelModes: [],
   vetoedRestaurantIds: [],
 });
 
