@@ -235,6 +235,53 @@ button {
   background: var(--surface-strong);
 }
 
+.copy-block {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(184, 59, 47, 0.28);
+  border-radius: 8px;
+  background: #fff8f3;
+  padding: 12px;
+}
+
+.copy-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.copy-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.copy-text {
+  min-height: 90px;
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px dashed rgba(184, 59, 47, 0.32);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  padding: 10px;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.copy-status {
+  margin: 0;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.copy-error {
+  color: var(--danger);
+}
+
 .recommendation-card.is-expanded {
   border-color: rgba(184, 59, 47, 0.35);
 }

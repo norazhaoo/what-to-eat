@@ -1,12 +1,15 @@
 import {
   DEFAULT_FILTERS,
+  MEAL_SCALE_OPTIONS,
+  SPICE_OPTIONS,
+  TRAVEL_MODE_OPTIONS,
   buildRecommendations,
   describeFilters,
+  formatRecommendationNames,
   getWeightedRandomRecommendation,
   toggleArrayValue,
-  toggleExcludedCuisine,
 } from "./recommendation.js";
-import { CUISINE_LABELS, ROUTE_INTENT_LABELS } from "./restaurants.js";
+import { CUISINE_LABELS } from "./restaurants.js";
 
 const app = document.querySelector("#app");
 
@@ -26,20 +29,18 @@ const routeOptions = [
   ["home_route", "回家顺路"],
   ["worth_trip", "为了好吃专门去"],
   ["city_walk", "进城吃完逛"],
-  ["any", "路线都可以"],
 ];
 
-const travelOptions = [
-  ["both", "路线两者都看"],
-  ["drive", "只看开车/打车"],
-  ["transit", "只看地铁"],
-];
+const mealOptions = MEAL_SCALE_OPTIONS.map((label) => [label, label]);
+const spiceOptions = SPICE_OPTIONS.map((label) => [label, label]);
+const travelOptions = TRAVEL_MODE_OPTIONS.map((label) => [label, label]);
 
 const state = {
   filters: cloneFilters(DEFAULT_FILTERS),
   expandedIds: new Set(),
   activeEditor: null,
   randomResult: null,
+  copyStatus: null,
 };
 
 app.addEventListener("click", handleClick);
@@ -80,12 +81,11 @@ function render() {
 
 function renderFilters() {
   const filterDescriptions = describeFilters(state.filters);
-  const cuisineText = state.filters.cuisines.length
-    ? state.filters.cuisines.map((cuisine) => CUISINE_LABELS[cuisine] ?? cuisine).join(" + ")
-    : "菜系都可以";
-  const excludedText = state.filters.excludedCuisines.length
-    ? state.filters.excludedCuisines.map((cuisine) => `不要${CUISINE_LABELS[cuisine] ?? cuisine}`).join(" / ")
-    : "无菜系排除";
+  const routeText = summarizeSelectedOptions(routeOptions, state.filters.routeIntents, "路线都可以");
+  const cuisineText = summarizeSelectedOptions(cuisineOptions, state.filters.cuisines, "菜系都可以");
+  const mealText = summarizeSelectedOptions(mealOptions, state.filters.mealScales, "饭局规模都可以");
+  const spiceText = summarizeSelectedOptions(spiceOptions, state.filters.spiceLevels, "辣度都可以");
+  const travelText = summarizeSelectedOptions(travelOptions, state.filters.travelModes, "路线两者都看");
 
   return `
     <section class="filter-panel" aria-label="随时可改的条件">
@@ -93,15 +93,11 @@ function renderFilters() {
         ${filterDescriptions.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
       </div>
       <div class="chip-row">
-        <button class="chip" type="button" data-action="edit-filter" data-editor="route">${escapeHtml(ROUTE_INTENT_LABELS[state.filters.routeIntent])}</button>
+        <button class="chip" type="button" data-action="edit-filter" data-editor="route">${escapeHtml(routeText)}</button>
         <button class="chip" type="button" data-action="edit-filter" data-editor="cuisine">${escapeHtml(cuisineText)}</button>
-        <button class="chip chip-danger" type="button" data-action="edit-filter" data-editor="excluded">${escapeHtml(excludedText)}</button>
-        <button class="chip ${state.filters.avoidFamiliar ? "chip-active" : ""}" type="button" data-action="toggle" data-key="avoidFamiliar">不要熟脸</button>
-        <button class="chip ${state.filters.mealScale === "big_only" ? "chip-active" : ""}" type="button" data-action="toggle-meal">吃大的</button>
-        <button class="chip ${state.filters.spiceRequired ? "chip-active" : ""}" type="button" data-action="toggle" data-key="spiceRequired">要辣</button>
-        <button class="chip ${state.filters.avoidSmallBites ? "chip-active" : ""}" type="button" data-action="toggle" data-key="avoidSmallBites">不要小吃/米线</button>
-        <button class="chip ${state.filters.avoidChains ? "chip-active" : ""}" type="button" data-action="toggle" data-key="avoidChains">不要连锁</button>
-        <button class="chip" type="button" data-action="edit-filter" data-editor="travel">${getTravelLabel(state.filters.travelMode)}</button>
+        <button class="chip" type="button" data-action="edit-filter" data-editor="meal">${escapeHtml(mealText)}</button>
+        <button class="chip" type="button" data-action="edit-filter" data-editor="spice">${escapeHtml(spiceText)}</button>
+        <button class="chip" type="button" data-action="edit-filter" data-editor="travel">${escapeHtml(travelText)}</button>
       </div>
     </section>
   `;
@@ -109,39 +105,19 @@ function renderFilters() {
 
 function renderEditor(editor) {
   if (editor === "route") {
-    return renderOptionEditor(
-      "路线意愿",
-      routeOptions.map(([value, label]) => ({
-        label,
-        active: state.filters.routeIntent === value,
-        action: "set-route",
-        value,
-      })),
-    );
+    return renderOptionEditor("路线意愿", buildFilterOptions("routeIntents", routeOptions));
   }
 
   if (editor === "travel") {
-    return renderOptionEditor(
-      "路线算法",
-      travelOptions.map(([value, label]) => ({
-        label,
-        active: state.filters.travelMode === value,
-        action: "set-travel",
-        value,
-      })),
-    );
+    return renderOptionEditor("路线算法", buildFilterOptions("travelModes", travelOptions));
   }
 
-  if (editor === "excluded") {
-    return renderOptionEditor(
-      "排除菜系",
-      cuisineOptions.map(([value, label]) => ({
-        label: `不要${label}`,
-        active: state.filters.excludedCuisines.includes(value),
-        action: "toggle-excluded-cuisine",
-        value,
-      })),
-    );
+  if (editor === "meal") {
+    return renderOptionEditor("饭局规模", buildFilterOptions("mealScales", mealOptions));
+  }
+
+  if (editor === "spice") {
+    return renderOptionEditor("辣度", buildFilterOptions("spiceLevels", spiceOptions));
   }
 
   return renderOptionEditor(
@@ -149,11 +125,20 @@ function renderEditor(editor) {
     cuisineOptions.map(([value, label]) => ({
       label,
       active: state.filters.cuisines.includes(value),
-      disabled: state.filters.excludedCuisines.includes(value),
       action: "toggle-cuisine",
       value,
     })),
   );
+}
+
+function buildFilterOptions(filterKey, options) {
+  return options.map(([value, label]) => ({
+    label,
+    active: state.filters[filterKey].includes(value),
+    action: "toggle-filter-option",
+    key: filterKey,
+    value,
+  }));
 }
 
 function renderOptionEditor(title, options) {
@@ -171,6 +156,7 @@ function renderOptionEditor(title, options) {
                 class="option-button ${option.active ? "option-active" : ""}"
                 type="button"
                 data-action="${option.action}"
+                ${option.key ? `data-key="${escapeHtml(option.key)}"` : ""}
                 data-value="${escapeHtml(option.value)}"
                 ${option.disabled ? "disabled" : ""}
               >
@@ -188,6 +174,7 @@ function renderRecommendations(recommendations) {
   return `
     <div class="recommendation-list">
       ${recommendations.map((card) => renderRecommendationCard(card)).join("")}
+      ${renderCopyBlock(recommendations)}
     </div>
   `;
 }
@@ -236,15 +223,39 @@ function renderRecommendationCard(card) {
   `;
 }
 
+function renderCopyBlock(recommendations) {
+  const copyText = formatRecommendationNames(recommendations);
+  const statusText = state.copyStatus === "copied" ? "已复制，可以直接发给黑黑" : "";
+  const failureText = state.copyStatus === "failed" ? "复制被浏览器拦住了，已选中名单" : "";
+
+  return `
+    <section class="copy-block" aria-label="给黑黑复制">
+      <div class="copy-heading">
+        <div>
+          <p class="eyebrow">Nora决定</p>
+          <h3>给黑黑复制</h3>
+        </div>
+        <button class="primary-button" type="button" data-action="copy-recommendations">
+          一键复制
+        </button>
+      </div>
+      <pre class="copy-text">${escapeHtml(copyText)}</pre>
+      ${statusText ? `<p class="copy-status" role="status">${escapeHtml(statusText)}</p>` : ""}
+      ${failureText ? `<p class="copy-status copy-error" role="status">${escapeHtml(failureText)}</p>` : ""}
+    </section>
+  `;
+}
+
 function renderEmptyState() {
   return `
     <section class="empty-state">
       <h2>现在没有符合条件的店</h2>
       <p>可以试试放宽一个条件：</p>
       <div class="empty-actions">
-        <button class="chip" type="button" data-action="relax" data-relax="familiar">放宽熟脸店</button>
-        <button class="chip" type="button" data-action="relax" data-relax="western">允许回家顺路西餐</button>
-        <button class="chip" type="button" data-action="relax" data-relax="small">允许小吃/米线</button>
+        <button class="chip" type="button" data-action="relax" data-relax="route">路线都看看</button>
+        <button class="chip" type="button" data-action="relax" data-relax="cuisine">菜系都看看</button>
+        <button class="chip" type="button" data-action="relax" data-relax="small">加入小吃一下</button>
+        <button class="chip" type="button" data-action="relax" data-relax="spice">接受不辣</button>
       </div>
     </section>
   `;
@@ -255,7 +266,7 @@ function renderRandomResult(card) {
     <div class="modal-backdrop" role="presentation" data-action="close-random">
       <section class="random-sheet" role="dialog" aria-modal="true" aria-label="随机结果">
         <p class="eyebrow">随机结果</p>
-        <h2>今天定：${escapeHtml(card.collapsedTitle)}</h2>
+        <h2>今天抽到：${escapeHtml(card.collapsedTitle)}</h2>
         <p class="dish-line">${card.dishPlan.map(escapeHtml).join(" + ")}</p>
         <p>${escapeHtml(card.whyThis[0] ?? card.collapsedSummary)}</p>
         <p class="route-line">${escapeHtml(card.routeSummary)}</p>
@@ -289,40 +300,17 @@ function handleClick(event) {
     return;
   }
 
-  if (action === "set-route") {
-    state.filters.routeIntent = target.dataset.value;
-    state.activeEditor = null;
-    render();
-    return;
-  }
-
-  if (action === "set-travel") {
-    state.filters.travelMode = target.dataset.value;
-    state.activeEditor = null;
-    render();
-    return;
-  }
-
   if (action === "toggle-cuisine") {
     state.filters.cuisines = toggleArrayValue(state.filters.cuisines, target.dataset.value);
+    state.copyStatus = null;
     render();
     return;
   }
 
-  if (action === "toggle-excluded-cuisine") {
-    state.filters = toggleExcludedCuisine(state.filters, target.dataset.value);
-    render();
-    return;
-  }
-
-  if (action === "toggle") {
-    state.filters[target.dataset.key] = !state.filters[target.dataset.key];
-    render();
-    return;
-  }
-
-  if (action === "toggle-meal") {
-    state.filters.mealScale = state.filters.mealScale === "big_only" ? "any" : "big_only";
+  if (action === "toggle-filter-option") {
+    const filterKey = target.dataset.key;
+    state.filters[filterKey] = toggleArrayValue(state.filters[filterKey], target.dataset.value);
+    state.copyStatus = null;
     render();
     return;
   }
@@ -347,6 +335,11 @@ function handleClick(event) {
 
   if (action === "choose") {
     chooseRestaurant(target.dataset.id);
+    return;
+  }
+
+  if (action === "copy-recommendations") {
+    copyRecommendations();
     return;
   }
 
@@ -383,6 +376,7 @@ function randomPick() {
 
 function vetoRestaurant(id) {
   state.filters.vetoedRestaurantIds = [...new Set([...state.filters.vetoedRestaurantIds, id])];
+  state.copyStatus = null;
   state.expandedIds.delete(id);
   if (state.randomResult?.restaurantId === id) {
     state.randomResult = null;
@@ -404,20 +398,23 @@ function chooseRestaurant(id) {
 }
 
 function relaxFilter(kind) {
-  if (kind === "familiar") {
-    state.filters.avoidFamiliar = false;
+  if (kind === "route") {
+    state.filters.routeIntents = [];
   }
 
-  if (kind === "western") {
-    state.filters.excludedCuisines = state.filters.excludedCuisines.filter((cuisine) => cuisine !== "western");
-    state.filters.cuisines = [...new Set([...state.filters.cuisines, "western"])];
-    state.filters.spiceRequired = false;
+  if (kind === "cuisine") {
+    state.filters.cuisines = [];
   }
 
   if (kind === "small") {
-    state.filters.avoidSmallBites = false;
-    state.filters.mealScale = "any";
+    state.filters.mealScales = [...new Set([...state.filters.mealScales, "小吃一下"])];
   }
+
+  if (kind === "spice") {
+    state.filters.spiceLevels = [...new Set([...state.filters.spiceLevels, "不辣"])];
+  }
+
+  state.copyStatus = null;
 }
 
 function resetState() {
@@ -425,19 +422,99 @@ function resetState() {
   state.expandedIds = new Set();
   state.activeEditor = null;
   state.randomResult = null;
+  state.copyStatus = null;
+}
+
+async function copyRecommendations() {
+  const recommendations = buildRecommendations(state.filters);
+  const copyText = formatRecommendationNames(recommendations);
+
+  try {
+    await writeClipboardText(copyText);
+    state.copyStatus = "copied";
+    render();
+  } catch {
+    state.copyStatus = "failed";
+    render();
+    selectCopyBlockText();
+  }
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      copyWithCommand(text);
+      return;
+    }
+  }
+
+  copyWithCommand(text);
+}
+
+function copyWithCommand(text) {
+  const copyHandler = (event) => {
+    event.clipboardData?.setData("text/plain", text);
+    event.preventDefault();
+  };
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  document.addEventListener("copy", copyHandler);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const didCopy = document.execCommand("copy");
+  document.removeEventListener("copy", copyHandler);
+  textarea.remove();
+
+  if (!didCopy) {
+    throw new Error("copy failed");
+  }
+}
+
+function selectCopyBlockText() {
+  const copyTextElement = document.querySelector(".copy-text");
+  if (!copyTextElement) {
+    return;
+  }
+
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(copyTextElement);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 }
 
 function cloneFilters(filters) {
   return {
     ...filters,
+    routeIntents: [...filters.routeIntents],
     cuisines: [...filters.cuisines],
-    excludedCuisines: [...filters.excludedCuisines],
+    mealScales: [...filters.mealScales],
+    spiceLevels: [...filters.spiceLevels],
+    travelModes: [...filters.travelModes],
     vetoedRestaurantIds: [...filters.vetoedRestaurantIds],
   };
 }
 
-function getTravelLabel(value) {
-  return travelOptions.find(([option]) => option === value)?.[1] ?? "路线两者都看";
+function summarizeSelectedOptions(options, selectedValues, fallback) {
+  const labels = selectedValues.map((value) => options.find(([option]) => option === value)?.[1] ?? value);
+
+  if (!labels.length) {
+    return fallback;
+  }
+
+  if (labels.length > 2) {
+    return `${labels.slice(0, 2).join(" + ")} +${labels.length - 2}`;
+  }
+
+  return labels.join(" + ");
 }
 
 function escapeHtml(value) {

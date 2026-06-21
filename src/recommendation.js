@@ -1,17 +1,17 @@
 import { CUISINE_LABELS, ROUTE_INTENT_LABELS, restaurants } from "./restaurants.js";
 
 export const DEFAULT_FILTERS = Object.freeze({
-  routeIntent: "worth_trip",
+  routeIntents: ["worth_trip"],
   cuisines: ["yunnan", "hunan"],
-  excludedCuisines: ["western"],
-  mealScale: "big_only",
-  spiceRequired: true,
-  avoidFamiliar: false,
-  avoidChains: false,
-  avoidSmallBites: true,
-  travelMode: "both",
+  mealScales: ["大吃一顿"],
+  spiceLevels: ["很辣", "云南辣", "中辣"],
+  travelModes: ["开车", "地铁"],
   vetoedRestaurantIds: [],
 });
+
+export const MEAL_SCALE_OPTIONS = ["大吃一顿", "小吃一下"];
+export const SPICE_OPTIONS = ["很辣", "云南辣", "中辣", "不辣"];
+export const TRAVEL_MODE_OPTIONS = ["开车", "地铁"];
 
 const tierScore = {
   top: 36,
@@ -35,23 +35,12 @@ const routeIntentBuckets = {
   any: [],
 };
 
+const routeExperienceTags = new Set(["专门去", "早回", "省事", "家附近"]);
+
 export function toggleArrayValue(values, value) {
   return values.includes(value)
     ? values.filter((item) => item !== value)
     : [...values, value];
-}
-
-export function toggleExcludedCuisine(filters, cuisine) {
-  const excludedCuisines = toggleArrayValue(filters.excludedCuisines, cuisine);
-  const cuisines = excludedCuisines.includes(cuisine)
-    ? filters.cuisines.filter((item) => item !== cuisine)
-    : filters.cuisines;
-
-  return {
-    ...filters,
-    cuisines,
-    excludedCuisines,
-  };
 }
 
 export function buildRecommendations(filters = DEFAULT_FILTERS) {
@@ -80,46 +69,33 @@ export function getWeightedRandomRecommendation(recommendations, random = Math.r
   return recommendations[recommendations.length - 1];
 }
 
+export function formatRecommendationNames(recommendations) {
+  return recommendations.map((card) => card.collapsedTitle).join("\n");
+}
+
 export function describeFilters(filters) {
+  const routeText = summarizeValues(
+    getRouteIntents(filters).map((intent) => ROUTE_INTENT_LABELS[intent] ?? intent),
+    "路线都可以",
+  );
   const cuisineText = filters.cuisines.length
     ? filters.cuisines.map((cuisine) => CUISINE_LABELS[cuisine] ?? cuisine).join(" + ")
     : "菜系都可以";
-  const excludedText = filters.excludedCuisines.length
-    ? `排除 ${filters.excludedCuisines.map((cuisine) => CUISINE_LABELS[cuisine] ?? cuisine).join(" / ")}`
-    : "无菜系排除";
+  const mealText = summarizeValues(getMealScales(filters), "饭局规模都可以");
+  const spiceText = summarizeValues(getSpiceLevels(filters), "辣度都可以");
+  const travelText = summarizeValues(getTravelModes(filters), "路线两者都看");
 
   return [
-    ROUTE_INTENT_LABELS[filters.routeIntent],
+    routeText,
     cuisineText,
-    excludedText,
-    filters.avoidFamiliar ? "不要熟脸" : "熟脸可选",
-    filters.mealScale === "big_only" ? "吃大的" : "大小都行",
-    filters.spiceRequired ? "要辣" : "辣不强求",
+    mealText,
+    spiceText,
+    travelText,
   ];
 }
 
 function isEligible(restaurant, filters) {
   if (filters.vetoedRestaurantIds.includes(restaurant.id)) {
-    return false;
-  }
-
-  if (filters.avoidChains && restaurant.identity.isChain) {
-    return false;
-  }
-
-  if (filters.avoidSmallBites && restaurant.identity.mealScale === "small") {
-    return false;
-  }
-
-  if (filters.mealScale === "big_only" && restaurant.identity.mealScale !== "big") {
-    return false;
-  }
-
-  if (filters.avoidFamiliar && restaurant.identity.familiar) {
-    return false;
-  }
-
-  if (restaurant.identity.cuisineFamilies.some((family) => filters.excludedCuisines.includes(family))) {
     return false;
   }
 
@@ -130,11 +106,28 @@ function isEligible(restaurant, filters) {
     return false;
   }
 
-  if (filters.spiceRequired && restaurant.taste.spiceLevel === "none") {
+  const routeIntents = getRouteIntents(filters).filter((intent) => intent !== "any");
+  if (
+    routeIntents.length > 0 &&
+    !routeIntents.some((intent) => (routeIntentBuckets[intent] ?? []).includes(restaurant.location.bucket))
+  ) {
     return false;
   }
 
-  return restaurant.decision.defaultEligibility !== "usually_excluded" || filters.avoidSmallBites === false;
+  const mealScales = getMealScales(filters);
+  if (mealScales.length > 0 && !mealScales.includes(getMealScaleLabel(restaurant))) {
+    return false;
+  }
+
+  const spiceLevels = getSpiceLevels(filters);
+  if (
+    spiceLevels.length > 0 &&
+    !getRestaurantSpiceLabels(restaurant).some((label) => spiceLevels.includes(label))
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function toRecommendationCard(restaurant, filters) {
@@ -143,6 +136,9 @@ function toRecommendationCard(restaurant, filters) {
   const cuisineText = restaurant.identity.cuisineFamilies
     .map((family) => CUISINE_LABELS[family] ?? restaurant.identity.cuisine)
     .join(" / ");
+  const mealScale = getMealScaleLabel(restaurant);
+  const spiceLabels = getRestaurantSpiceLabels(restaurant);
+  const afterMealText = formatAfterMealOptions(restaurant);
   const routeSummary = buildRouteSummary(restaurant, filters);
   const whyThis = buildWhyThis(restaurant, filters);
   const tradeoffs = restaurant.decision.vetoRisks.map((risk) => `风险：${risk}`);
@@ -150,8 +146,16 @@ function toRecommendationCard(restaurant, filters) {
   return {
     restaurantId: restaurant.id,
     collapsedTitle: restaurant.name,
-    collapsedSummary: `${restaurant.identity.preferenceTier === "top" ? "高偏好" : "低频候选"} · ${cuisineText} · ${restaurant.location.routeVerdict}`,
+    collapsedSummary: [
+      restaurant.identity.preferenceTier === "top" ? "高偏好" : "低频候选",
+      cuisineText,
+      spiceLabels.join(" / "),
+      restaurant.location.routeVerdict,
+      afterMealText,
+    ].filter(Boolean).join(" · "),
     cuisineFamilies: restaurant.identity.cuisineFamilies,
+    mealScale,
+    spiceLabels,
     dishPlan,
     whyThis,
     routeSummary,
@@ -162,17 +166,28 @@ function toRecommendationCard(restaurant, filters) {
 
 function scoreRestaurant(restaurant, filters) {
   let score = 0;
+  const spiceLabels = getRestaurantSpiceLabels(restaurant);
+  const routeIntents = getRouteIntents(filters);
+
   score += tierScore[restaurant.identity.preferenceTier] ?? 0;
   score += eligibilityScore[restaurant.decision.defaultEligibility] ?? 0;
   score += restaurant.dishes.length * 2;
 
   if (restaurant.identity.mealScale === "big") {
     score += 10;
+  } else {
+    score -= 4;
   }
 
-  if (restaurant.taste.spiceLevel === "hot") {
+  if (spiceLabels.includes("很辣")) {
     score += 8;
-  } else if (restaurant.taste.spiceLevel === "medium") {
+  }
+
+  if (spiceLabels.includes("云南辣")) {
+    score += 5;
+  }
+
+  if (spiceLabels.includes("中辣")) {
     score += 4;
   }
 
@@ -180,24 +195,13 @@ function scoreRestaurant(restaurant, filters) {
     score += 14;
   }
 
-  if (filters.avoidFamiliar && !restaurant.identity.familiar) {
-    score += 12;
-  }
+  score += Math.min(30, routeScore(restaurant, routeIntents));
 
-  const preferredBuckets = routeIntentBuckets[filters.routeIntent] ?? [];
-  if (preferredBuckets.includes(restaurant.location.bucket)) {
-    score += 18;
-  }
-
-  if (filters.routeIntent === "city_walk" && restaurant.location.afterMealOptions.length > 0) {
-    score += 8;
-  }
-
-  if (filters.routeIntent === "worth_trip" && restaurant.location.detour === "major_detour") {
+  if (routeIntents.includes("worth_trip") && restaurant.location.detour === "major_detour") {
     score -= 8;
   }
 
-  if (filters.spiceRequired && restaurant.taste.spiceLevel === "medium") {
+  if (!getSpiceLevels(filters).includes("中辣") && restaurant.taste.spiceLevel === "medium") {
     score -= 3;
   }
 
@@ -211,36 +215,135 @@ function scoreRestaurant(restaurant, filters) {
 function buildRouteSummary(restaurant, filters) {
   const drive = `开车/打车：公司过去${restaurant.location.driveCompany}，吃完回家${restaurant.location.driveHome}`;
   const transit = `地铁体感：公司过去${restaurant.location.transitCompany}，回家${restaurant.location.transitHome}`;
+  const modes = getTravelModes(filters);
+  const routeParts = [];
 
-  if (filters.travelMode === "drive") {
-    return `${drive}。${restaurant.location.routeVerdict}`;
+  if (modes.length === 0 || modes.includes("开车")) {
+    routeParts.push(drive);
   }
 
-  if (filters.travelMode === "transit") {
-    return `${transit}。${restaurant.location.routeVerdict}`;
+  if (modes.length === 0 || modes.includes("地铁")) {
+    routeParts.push(transit);
   }
 
-  return `${drive}；${transit}。${restaurant.location.routeVerdict}`;
+  return [
+    `${routeParts.join("；")}。${restaurant.location.routeVerdict}`,
+    formatAfterMealOptions(restaurant, "吃完可以"),
+  ].filter(Boolean).join("。");
 }
 
 function buildWhyThis(restaurant, filters) {
   const reasons = [];
+  const mealScale = getMealScaleLabel(restaurant);
+  const spiceLabels = getRestaurantSpiceLabels(restaurant);
+  const matchedRoutes = getRouteIntents(filters)
+    .filter((intent) => (routeIntentBuckets[intent] ?? []).includes(restaurant.location.bucket))
+    .map((intent) => ROUTE_INTENT_LABELS[intent] ?? intent);
+  const afterMealText = formatAfterMealOptions(restaurant, "吃完可以");
 
   if (restaurant.identity.mealScale === "big") {
-    reasons.push("是正经吃一顿，不是小吃/米线局");
+    reasons.push(`适合${mealScale}`);
+  } else {
+    reasons.push(`适合${mealScale}`);
   }
 
-  if (!restaurant.identity.familiar) {
-    reasons.push("不是本轮熟脸 top，适合换一换");
+  if (spiceLabels.some((label) => label !== "不辣")) {
+    reasons.push(`辣度符合：${spiceLabels.join(" / ")}`);
   }
 
-  if (restaurant.taste.spiceLevel !== "none") {
-    reasons.push(`满足要辣：${restaurant.taste.spiceStyle}`);
+  if (matchedRoutes.length > 0) {
+    reasons.push(`符合路线意愿：${matchedRoutes.join(" + ")}`);
   }
 
-  if ((routeIntentBuckets[filters.routeIntent] ?? []).includes(restaurant.location.bucket)) {
-    reasons.push(`符合路线意愿：${ROUTE_INTENT_LABELS[filters.routeIntent]}`);
+  if (afterMealText) {
+    reasons.push(afterMealText);
   }
 
   return reasons.length ? reasons : restaurant.decision.goodWhen;
+}
+
+function routeScore(restaurant, routeIntents) {
+  if (routeIntents.length === 0 || routeIntents.includes("any")) {
+    return 4;
+  }
+
+  return routeIntents.reduce((score, intent) => {
+    const buckets = routeIntentBuckets[intent] ?? [];
+    if (!buckets.includes(restaurant.location.bucket)) {
+      return score;
+    }
+
+    let nextScore = score + 18;
+    if (intent === "city_walk" && getDisplayAfterMealOptions(restaurant).length > 0) {
+      nextScore += 8;
+    }
+
+    if (intent === "home_route" && restaurant.location.detour === "small_detour") {
+      nextScore += 4;
+    }
+
+    return nextScore;
+  }, 0);
+}
+
+function getRouteIntents(filters) {
+  return Array.isArray(filters.routeIntents) ? filters.routeIntents : [];
+}
+
+function getMealScales(filters) {
+  return Array.isArray(filters.mealScales) ? filters.mealScales : [];
+}
+
+function getSpiceLevels(filters) {
+  return Array.isArray(filters.spiceLevels) ? filters.spiceLevels : [];
+}
+
+function getTravelModes(filters) {
+  return Array.isArray(filters.travelModes) ? filters.travelModes : [];
+}
+
+function getMealScaleLabel(restaurant) {
+  return restaurant.identity.mealScale === "big" ? "大吃一顿" : "小吃一下";
+}
+
+function getRestaurantSpiceLabels(restaurant) {
+  const labels = new Set();
+
+  if (restaurant.taste.spiceLevel === "hot") {
+    labels.add("很辣");
+  } else if (restaurant.taste.spiceLevel === "medium") {
+    labels.add("中辣");
+  } else {
+    labels.add("不辣");
+  }
+
+  if (
+    restaurant.taste.spiceLevel !== "none" &&
+    restaurant.identity.cuisineFamilies.includes("yunnan")
+  ) {
+    labels.add("云南辣");
+  }
+
+  return [...labels];
+}
+
+function formatAfterMealOptions(restaurant, prefix = "吃完可") {
+  const options = getDisplayAfterMealOptions(restaurant);
+  return options.length ? `${prefix}${options.join("、")}` : "";
+}
+
+function getDisplayAfterMealOptions(restaurant) {
+  return restaurant.location.afterMealOptions.filter((option) => !routeExperienceTags.has(option));
+}
+
+function summarizeValues(values, fallback) {
+  if (!values.length) {
+    return fallback;
+  }
+
+  if (values.length > 2) {
+    return `${values.length} 项`;
+  }
+
+  return values.join(" + ");
 }
